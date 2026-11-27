@@ -1,0 +1,98 @@
+name: Windows RDP
+
+on:
+  workflow_dispatch:   # Run manually from Actions tab
+
+jobs:
+  rdp:
+    runs-on: windows-latest
+    timeout-minutes: 360   # Max 6 hours per run
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Enable RDP + Create User
+        shell: pwsh
+        run: |
+          # Enable Remote Desktop
+          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' -Name "fDenyTSConnections" -Value 0
+          Enable-NetFirewallRule -DisplayGroup "Remote Desktop"
+          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\UserAuthentication' -Name "UserAuthentication" -Value 0
+
+          # Create RDP user - CHANGE THIS PASSWORD BEFORE RUNNING
+          $password = ConvertTo-SecureString "Admin@123" -AsPlainText -Force
+          New-LocalUser -Name "rdpuser" -Password $password -FullName "RDP User" -Description "RDP User"
+          Add-LocalGroupMember -Group "Administrators" -Member "rdpuser"
+          Enable-LocalUser -Name "rdpuser"
+
+          Restart-Service -Name TermService -Force
+          Get-Service TermService
+          Write-Host "RDP Enabled!"
+
+      - name: Download ngrok
+        shell: pwsh
+        run: |
+          Invoke-WebRequest -Uri https://bin.equinox.io/c/bNyjgHFD3hN/ngrok-v3-stable-windows-amd64.zip -OutFile ngrok.zip
+          Expand-Archive ngrok.zip
+          .\ngrok version
+
+      - name: Start ngrok tunnel + Keep Alive
+        shell: pwsh
+        env:
+          NGROK_AUTH_TOKEN: ${{ secrets.NGROK_AUTH_TOKEN }}
+        run: |
+          if (-not $env:NGROK_AUTH_TOKEN) {
+            Write-Host "::error::NGROK_AUTH_TOKEN secret is missing!"
+            Write-Host "Go to: Repo > Settings > Secrets and variables > Actions > New repository secret"
+            Write-Host "Name: NGROK_AUTH_TOKEN  Value: your ngrok token"
+            exit 1
+          }
+
+          .\ngrok authtoken $env:NGROK_AUTH_TOKEN
+
+          # Start tunnel for RDP port 3389 in background
+          Start-Process -FilePath ".\ngrok.exe" -ArgumentList "tcp 3389" -NoNewWindow
+          Start-Sleep -Seconds 12
+
+          # Get public address from ngrok local API
+          $tunnel = Invoke-RestMethod -Uri http://127.0.0.1:4040/api/tunnels
+          $publicUrl = $tunnel.tunnels[0].public_url
+
+          Write-Host "=========================================="
+          Write-Host "        RDP CONNECTION INFO"
+          Write-Host "=========================================="
+          Write-Host "Public URL : $publicUrl"
+          Write-Host "Username   : rdpuser"
+          Write-Host "Password   : Admin@123"
+          Write-Host "=========================================="
+          Write-Host "Copy the Public URL above and use it in your RDP app."
+          Write-Host "Example: 0.tcp.ngrok.io:12345  -> Host=0.tcp.ngrok.io  Port=12345"
+          Write-Host "=========================================="
+
+          @"
+          RDP INFO
+          Public URL: $publicUrl
+          Username: rdpuser
+          Password: Admin@123
+          "@ | Out-File -FilePath rdp-info.txt
+
+          Write-Host "RDP is LIVE! Keeping runner alive..."
+          Write-Host "To stop: GitHub > Actions > click this run > Cancel workflow"
+
+          while ($true) {
+            Start-Sleep -Seconds 300
+            try {
+              $tunnel = Invoke-RestMethod -Uri http://127.0.0.1:4040/api/tunnels
+              Write-Host "Still live: $($tunnel.tunnels[0].public_url) - $(Get-Date)"
+            } catch {
+              Write-Host "ngrok check failed, retrying..."
+            }
+          }
+
+      - name: Upload RDP info
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: rdp-info
+          path: rdp-info.txt
