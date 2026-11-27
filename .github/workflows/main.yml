@@ -18,7 +18,11 @@ jobs:
           # Enable Remote Desktop
           Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' -Name "fDenyTSConnections" -Value 0
           Enable-NetFirewallRule -DisplayGroup "Remote Desktop"
-          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\UserAuthentication' -Name "UserAuthentication" -Value 0
+         try {
+  Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -Name "UserAuthentication" -Value 0 -ErrorAction Stop
+} catch {
+  Write-Host "NLA key not found, skipping"
+}
 
           # Create RDP user - CHANGE THIS PASSWORD BEFORE RUNNING
           $password = ConvertTo-SecureString "Admin@123" -AsPlainText -Force
